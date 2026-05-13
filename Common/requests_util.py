@@ -159,6 +159,10 @@ class RequestsUtil:
           - "N" 或 "no":   不注入 Token（公开接口）
           - 其他值:         不注入 Token
 
+        优先级：
+          1. 如果 headers 中已有 Authorization（如通过 #login_token# 手动设置），不覆盖
+          2. 否则自动从全局变量获取 login_token 并注入
+
         Args:
             headers: 原始请求头
             login_status: 鉴权标识
@@ -171,6 +175,11 @@ class RequestsUtil:
         # 不需要鉴权的接口直接返回
         if status in ("n", "no", "false"):
             info(f"  鉴权模式: 不需要Token（公开接口）")
+            return headers
+
+        # 已有 Authorization 头，说明手动设置了（如 #login_token#），不覆盖
+        if "Authorization" in headers:
+            info(f"  鉴权模式: 已有Authorization头，跳过自动注入 → {headers['Authorization'][:30]}...")
             return headers
 
         # 需要鉴权（Y / auto / 空 / 任何其他值 → 默认注入）
