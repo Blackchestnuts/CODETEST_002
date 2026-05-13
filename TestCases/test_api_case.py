@@ -18,6 +18,10 @@ import pytest
 from Common.excel_util import ApiCaseData, load_excel_cases
 from Common.requests_util import RequestsUtil
 from Common.log_util import info
+from Common.project_util import (
+    get_project_config,
+    get_default_project,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -29,18 +33,17 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     pytest 动态参数化钩子。
 
     当测试函数的参数中包含 "api_case" 时：
-      1. 从 config.ini 的 [project_项目名] 节获取 Excel 文件名
+      1. 从 projects.yaml 获取指定项目的 Excel 文件名
       2. 加载对应 Excel 中的测试用例
       3. 将用例参数化为独立的测试用例
     """
     if "api_case" in metafunc.fixturenames:
-        # 获取 --project 参数
-        project_name: str = metafunc.config.getoption("--project", default="httpbin")
+        # 获取 --project 参数，未指定则使用默认项目
+        project_name: str = metafunc.config.getoption("--project", default=None) or get_default_project()
 
-        # 从项目配置获取 Excel 文件名
-        from Common.ini_util import IniUtil
-        section = f"project_{project_name}"
-        excel_file = IniUtil.get(section, "excel_file", "api_test_data.xlsx")
+        # 从 projects.yaml 获取 Excel 文件名
+        project_cfg = get_project_config(project_name)
+        excel_file = project_cfg.get("excel_file", "api_test_data.xlsx")
 
         info(f"[test_api_case] 项目: {project_name}, Excel: {excel_file}")
 

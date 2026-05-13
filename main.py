@@ -10,9 +10,9 @@ main.py — 框架入口文件
   6. 统一控制整个框架一键运行
 
 使用方式：
-  python3 main.py                           # 默认项目（httpbin）
+  python3 main.py                           # 默认项目
   python3 main.py --project=jsonplaceholder # 指定项目
-  python3 main.py --project=httpbin         # 指定项目
+  python3 main.py --project=httpbin
 """
 from __future__ import annotations
 
@@ -23,7 +23,11 @@ import sys
 
 from Common.path_util import ensure_dirs, TESTCASES_DIR, ALLURE_REPORT_DIR, PROJECT_ROOT
 from Common.log_util import info, error
-from Common.ini_util import IniUtil
+from Common.project_util import (
+    get_project_config,
+    get_default_project,
+    show_available_projects,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,27 +41,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--project",
         type=str,
-        default="httpbin",
-        help="指定测试项目名称，对应 config.ini 中的 [project_项目名] 节 (默认: httpbin)",
+        default=None,
+        help="指定测试项目名称，对应 projects.yaml 中的项目名 (默认: httpbin)",
     )
     return parser.parse_args()
-
-
-def show_available_projects() -> None:
-    """显示所有可用的项目配置。"""
-    info("可用项目列表:")
-    info("-" * 50)
-    for section in IniUtil.get_sections():
-        if section.startswith("project_"):
-            project_name = section.replace("project_", "")
-            excel_file = IniUtil.get(section, "excel_file", "")
-            base_url = IniUtil.get(section, "base_url", "")
-            description = IniUtil.get(section, "description", "")
-            info(f"  项目: {project_name}")
-            info(f"    域名: {base_url}")
-            info(f"    Excel: {excel_file}")
-            info(f"    描述: {description}")
-            info("-" * 50)
 
 
 def main() -> None:
@@ -74,7 +61,7 @@ def main() -> None:
     """
     # 1. 解析参数
     args = parse_args()
-    project_name: str = args.project
+    project_name: str = args.project or get_default_project()
 
     # 2. 初始化
     ensure_dirs()
@@ -85,18 +72,15 @@ def main() -> None:
     # 3. 显示可用项目
     show_available_projects()
 
-    # 4. 验证项目配置
-    section = f"project_{project_name}"
-    if not IniUtil.get(section, "excel_file"):
-        error(f"项目 '{project_name}' 未在 config.ini 中配置！")
-        error(f"请在 config.ini 中添加 [project_{project_name}] 节")
-        error("可用项目: " + ", ".join(
-            s.replace("project_", "") for s in IniUtil.get_sections() if s.startswith("project_")
-        ))
+    # 4. 验证并加载项目配置
+    try:
+        project_cfg = get_project_config(project_name)
+    except ValueError as e:
+        error(str(e))
         sys.exit(1)
 
-    excel_file = IniUtil.get(section, "excel_file")
-    base_url = IniUtil.get(section, "base_url")
+    excel_file = project_cfg.get("excel_file")
+    base_url = project_cfg.get("base_url")
     info(f"当前项目: {project_name}")
     info(f"  接口域名: {base_url}")
     info(f"  用例文件: {excel_file}")

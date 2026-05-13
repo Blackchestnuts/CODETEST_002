@@ -1,0 +1,46 @@
+# ==========================================================================
+# 项目注册表 — 管理不同测试项目的配置
+# ==========================================================================
+#
+# 新增项目只需在下方添加一个条目，无需修改任何 Python 代码。
+#
+# 每个项目的字段说明：
+#   name:        项目名称（用于 --project 参数）
+#   description: 项目描述
+#   excel_file:  Excel 用例文件名（位于 TestDatas/ 目录下）
+#   base_url:    项目基础 URL（覆盖 config.ini 中的 base_url）
+#   enabled:     是否启用（Y/N）
+#
+# 使用方式：
+#   python3 main.py --project=httpbin
+#   python3 main.py --project=jsonplaceholder
+#   python3 main.py                           # 默认执行 default_project
+# ==========================================================================
+
+# 默认项目（不指定 --project 时执行）
+default_project: httpbin
+
+projects:
+  # ----- 项目1：httpbin 接口演示 -----
+  httpbin:
+    name: httpbin
+    description: "httpbin.org 基础接口测试（默认项目）"
+    excel_file: api_test_data.xlsx
+    base_url: https://httpbin.org
+    enabled: Y
+
+  # ----- 项目2：JSONPlaceholder 用户接口 -----
+  jsonplaceholder:
+    name: jsonplaceholder
+    description: "JSONPlaceholder 用户/帖子/评论接口测试"
+    excel_file: user_api_cases.xlsx
+    base_url: https://jsonplaceholder.typicode.com
+    enabled: Y
+
+  # ----- 项目3：新增项目模板（复制后修改即可） -----
+  # your_project:
+  #   name: your_project
+  #   description: "你的项目描述"
+  #   excel_file: your_test_data.xlsx
+  #   base_url: https://your-api.example.com
+  #   enabled: Y

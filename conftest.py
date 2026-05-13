@@ -9,18 +9,11 @@ conftest.py — 全局 Pytest Fixture 池
 所有 Fixture 均为 Session 作用域。
 
 使用方式：
-  # 默认项目（httpbin）
-  python3 main.py
-
-  # 指定项目
-  python3 main.py --project=jsonplaceholder
-
-  # pytest 直接运行
-  python3 -m pytest TestCases/ --project=httpbin -v -s
+  python3 main.py                           # 默认项目
+  python3 main.py --project=jsonplaceholder # 指定项目
+  pytest TestCases/ --project=httpbin -v -s
 """
 from __future__ import annotations
-
-from typing import Any
 
 import pytest
 import requests
@@ -30,51 +23,11 @@ from Common.global_data import GlobalData
 from Common.log_util import info
 from Common.ini_util import IniUtil
 from Common.path_util import ensure_dirs
-
-
-# ---------------------------------------------------------------------------
-# 项目配置缓存（Session 级别，避免重复读取 INI）
-# ---------------------------------------------------------------------------
-_project_config: dict[str, str] = {}
-
-
-def _get_project_config(project_name: str) -> dict[str, str]:
-    """
-    获取指定项目的配置信息。
-
-    从 config.ini 的 [project_项目名] 节读取配置，
-    如果项目节不存在则回退到默认 [api] 节。
-
-    Args:
-        project_name: 项目名称，如 httpbin、jsonplaceholder
-
-    Returns:
-        dict[str, str]: 项目配置，包含 excel_file、base_url 等
-    """
-    global _project_config
-
-    if _project_config:
-        return _project_config
-
-    section = f"project_{project_name}"
-
-    if IniUtil.get(section, "excel_file"):
-        _project_config = {
-            "excel_file": IniUtil.get(section, "excel_file", "api_test_data.xlsx"),
-            "base_url": IniUtil.get(section, "base_url", "https://httpbin.org"),
-            "description": IniUtil.get(section, "description", project_name),
-        }
-        info(f"[conftest] 使用项目配置: {section} → {_project_config}")
-    else:
-        # 回退到默认配置
-        _project_config = {
-            "excel_file": "api_test_data.xlsx",
-            "base_url": IniUtil.get("api", "base_url", "https://httpbin.org"),
-            "description": "默认项目",
-        }
-        info(f"[conftest] 项目节 [{section}] 不存在，使用默认配置")
-
-    return _project_config
+from Common.project_util import (
+    get_project_config,
+    get_default_project,
+    show_available_projects,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +45,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--project",
         action="store",
-        default="httpbin",
-        help="指定测试项目名称，对应 config.ini 中的 [project_项目名] 节",
+        default=None,
+        help="指定测试项目名称，对应 projects.yaml 中的项目名",
     )
 
 
@@ -108,17 +61,22 @@ def pytest_configure(config: pytest.Config) -> None:
     执行：
       1. 确保输出目录存在
       2. 加载项目配置
-      3. 初始化日志
+      3. 显示可用项目列表
     """
     ensure_dirs()
 
-    # 获取项目名称并加载配置
-    project_name: str = config.getoption("--project", default="httpbin")
-    _get_project_config(project_name)
+    # 获取项目名称：优先命令行参数，其次默认项目
+    project_name: str = config.getoption("--project", default=None) or get_default_project()
+
+    # 加载项目配置并缓存
+    project_cfg = get_project_config(project_name)
 
     info("=" * 60)
     info(f"ApiAutoTest 框架初始化 | 项目: {project_name}")
     info("=" * 60)
+
+    # 显示可用项目
+    show_available_projects()
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +93,21 @@ def requests_util() -> RequestsUtil:
     Returns:
         RequestsUtil: 请求封装实例
     """
-    config = _get_project_config("")
+    # 从 projects.yaml 获取当前项目的 base_url
+    project_name = get_default_project()
+    try:
+        import sys
+        for arg in sys.argv:
+            if arg.startswith("--project="):
+                project_name = arg.split("=", 1)[1]
+                break
+            elif arg == "--project" and sys.argv.index(arg) + 1 < len(sys.argv):
+                project_name = sys.argv[sys.argv.index(arg) + 1]
+                break
+    except Exception:
+        pass
+
+    config = get_project_config(project_name)
     base_url = config.get("base_url", "https://httpbin.org")
     timeout = IniUtil.get_int("api", "timeout", 10)
     util = RequestsUtil(base_url=base_url, timeout=timeout)
@@ -153,7 +125,17 @@ def login_token() -> None:
       2. 从响应中提取 Token
       3. 存入全局变量 GlobalData，供后续 #login_token# 引用
     """
-    config = _get_project_config("")
+    project_name = get_default_project()
+    try:
+        import sys
+        for arg in sys.argv:
+            if arg.startswith("--project="):
+                project_name = arg.split("=", 1)[1]
+                break
+    except Exception:
+        pass
+
+    config = get_project_config(project_name)
     base_url = config.get("base_url", "https://httpbin.org")
 
     # 模拟登录请求（httpbin.org/post 回显请求体）
