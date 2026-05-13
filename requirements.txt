@@ -1,0 +1,8 @@
+requests==2.31.0
+pytest==7.4.0
+allure-pytest==2.13.2
+pymysql==1.1.0
+openpyxl==3.1.2
+jsonpath==0.82
+pytest-rerunfailures==11.1
+configparser==5.3.0

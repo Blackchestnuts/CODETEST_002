@@ -1,0 +1,17 @@
+# 输出文件
+Outputs/logs/
+Outputs/allure_report/
+Outputs/allure_html/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 数据库
+*.sqlite3
+
+# IDE
+.idea/
+.vscode/
