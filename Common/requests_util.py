@@ -2,9 +2,11 @@
 Common/requests_util.py — requests 接口请求封装
 
 核心功能：
+  - 使用 requests.Session 实现连接池 + Cookie 自动管理
   - 封装 GET/POST/PUT/DELETE/PATCH 请求
   - 带重试机制（Timeout/ConnectionError 自动重试）
   - 自动 #变量# 替换
+  - 根据 login_status 列自动注入 Token 鉴权
   - 请求日志记录
   - 响应 jsonpath 提取并存入全局变量
   - 状态码 + 字段断言
@@ -12,6 +14,7 @@ Common/requests_util.py — requests 接口请求封装
 
 设计要点：
   - 所有请求统一走此模块，不直接使用 requests
+  - 使用 Session 对象复用连接，自动管理 Cookie
   - 请求前自动调用 re_replace 替换 #变量#
   - 请求后自动调用 jsonpath 提取并存入全局变量
   - 断言失败抛出 AssertionError，由 pytest 捕获
@@ -32,7 +35,12 @@ from Common.ini_util import IniUtil
 
 class RequestsUtil:
     """
-    接口请求封装类。
+    接口请求封装类（基于 requests.Session）。
+
+    使用 Session 的好处：
+      1. 连接池复用，减少 TCP 握手开销
+      2. 自动管理 Cookie，跨请求保持会话
+      3. 统一设置公共请求头（如 Content-Type）
 
     使用方式：
         api = RequestsUtil(base_url="https://httpbin.org")
@@ -54,18 +62,30 @@ class RequestsUtil:
         self.retry_interval: float = retry_interval
         self.timeout: int = timeout
 
+        # 使用 Session 实现连接池 + Cookie 自动管理
+        self.session: requests.Session = requests.Session()
+
+        # 设置公共请求头
+        self.session.headers.update({
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        })
+
+        info(f"[requests_util] Session 初始化完成: base_url={self.base_url}")
+
     def send_request(self, case: Any) -> dict[str, Any]:
         """
         执行单条测试用例的完整流程。
 
         流程：
           1. 解析并替换 #变量#
-          2. 拼接 URL
-          3. 发送请求（带重试）
-          4. 断言状态码
-          5. 断言响应字段
-          6. jsonpath 提取并存入全局变量
-          7. 数据库校验
+          2. 根据 login_status 自动注入 Token
+          3. 拼接 URL
+          4. 发送请求（带重试）
+          5. 断言状态码
+          6. 断言响应字段
+          7. jsonpath 提取并存入全局变量
+          8. 数据库校验
 
         Args:
             case: ApiCaseData 用例对象
@@ -75,7 +95,7 @@ class RequestsUtil:
         """
         info(f"{'='*60}")
         info(f"执行用例: {case.display_name}")
-        info(f"  方法: {case.method}  URL: {case.url}  替换: {case.replace_flag}")
+        info(f"  方法: {case.method}  URL: {case.url}  替换: {case.replace_flag}  鉴权: {case.login_status}")
         info(f"{'='*60}")
 
         # 1. 解析请求参数（如需替换则进行 #变量# 替换）
@@ -90,10 +110,13 @@ class RequestsUtil:
             info(f"  替换后请求头: {headers}")
             info(f"  替换后参数: {params}")
 
-        # 2. 拼接 URL
+        # 2. 根据 login_status 自动注入 Token
+        headers = self._inject_auth_token(headers, case.login_status)
+
+        # 3. 拼接 URL
         url = self._build_url(case.url)
 
-        # 3. 发送请求
+        # 4. 发送请求
         response = self._send_request(
             method=case.method,
             url=url,
@@ -101,12 +124,12 @@ class RequestsUtil:
             params=params,
         )
 
-        # 4. 断言预期结果
+        # 5. 断言预期结果
         expected = case.parse_expected_result()
         if expected:
             self._assert_response(response, expected)
 
-        # 5. jsonpath 提取并存入全局变量
+        # 6. jsonpath 提取并存入全局变量
         if case.extract_expression and case.global_var_name:
             try:
                 resp_json = response.json()
@@ -114,7 +137,7 @@ class RequestsUtil:
             except Exception as e:
                 warning(f"jsonpath 提取失败: {e}")
 
-        # 6. 数据库校验
+        # 7. 数据库校验
         if case.db_check_sql and case.db_expected_value:
             self._db_assert(case.db_check_sql, case.db_expected_value)
 
@@ -126,6 +149,39 @@ class RequestsUtil:
         }
         info(f"用例执行成功: {case.display_name} ({result['elapsed_ms']:.0f}ms)")
         return result
+
+    def _inject_auth_token(self, headers: dict[str, Any], login_status: str) -> dict[str, Any]:
+        """
+        根据 login_status 自动注入 Token 到请求头。
+
+        login_status 取值：
+          - "Y" 或 "auto":  自动注入 Token（默认行为）
+          - "N" 或 "no":   不注入 Token（公开接口）
+          - 其他值:         不注入 Token
+
+        Args:
+            headers: 原始请求头
+            login_status: 鉴权标识
+
+        Returns:
+            dict[str, Any]: 注入后的请求头
+        """
+        status = str(login_status).strip().lower()
+
+        # 不需要鉴权的接口直接返回
+        if status in ("n", "no", "false"):
+            info(f"  鉴权模式: 不需要Token（公开接口）")
+            return headers
+
+        # 需要鉴权（Y / auto / 空 / 任何其他值 → 默认注入）
+        token = GlobalData.get("login_token")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+            info(f"  鉴权模式: 自动注入Token → Bearer {token[:20]}...")
+        else:
+            warning("  鉴权模式: 需要Token但全局变量中无login_token")
+
+        return headers
 
     def _build_url(self, url_path: str) -> str:
         """拼接完整 URL。"""
@@ -142,7 +198,7 @@ class RequestsUtil:
         headers: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> requests.Response:
-        """带重试的请求发送。"""
+        """带重试的请求发送（使用 Session）。"""
         last_exception: Exception | None = None
 
         for attempt in range(1, self.max_retries + 1):
@@ -151,13 +207,13 @@ class RequestsUtil:
 
                 # GET 请求参数用 params，其他用 json body
                 if method.upper() == "GET":
-                    response = requests.request(
+                    response = self.session.request(
                         method=method.upper(), url=url,
                         headers=headers, params=params,
                         timeout=self.timeout,
                     )
                 else:
-                    response = requests.request(
+                    response = self.session.request(
                         method=method.upper(), url=url,
                         headers=headers, json=params,
                         timeout=self.timeout,
@@ -216,3 +272,8 @@ class RequestsUtil:
             warning("mysql_util 未配置，跳过数据库校验")
         except Exception as e:
             warning(f"数据库校验异常: {e}")
+
+    def close(self) -> None:
+        """关闭 Session，释放连接池资源。"""
+        self.session.close()
+        info("[requests_util] Session 已关闭")

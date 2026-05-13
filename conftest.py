@@ -3,7 +3,7 @@ conftest.py — 全局 Pytest Fixture 池
 
 提供以下功能：
   - --project 命令行参数，支持多项目切换
-  - requests_util: 创建 RequestsUtil 请求封装实例
+  - requests_util: 创建 RequestsUtil 请求封装实例（基于 Session）
   - login_token: 自动登录并存储 Token 到全局变量
 
 所有 Fixture 均为 Session 作用域。
@@ -30,18 +30,26 @@ from Common.project_util import (
 )
 
 
+def _get_current_project_name() -> str:
+    """获取当前项目名称（从命令行参数或默认值）。"""
+    project_name = get_default_project()
+    try:
+        import sys
+        for arg in sys.argv:
+            if arg.startswith("--project="):
+                project_name = arg.split("=", 1)[1]
+                break
+    except Exception:
+        pass
+    return project_name
+
+
 # ---------------------------------------------------------------------------
 # pytest 命令行参数注册
 # ---------------------------------------------------------------------------
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """
-    注册 --project 命令行参数。
-
-    使用方式：
-      pytest --project=httpbin
-      pytest --project=jsonplaceholder
-    """
+    """注册 --project 命令行参数。"""
     parser.addoption(
         "--project",
         action="store",
@@ -55,27 +63,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # ---------------------------------------------------------------------------
 
 def pytest_configure(config: pytest.Config) -> None:
-    """
-    pytest 初始化钩子。
-
-    执行：
-      1. 确保输出目录存在
-      2. 加载项目配置
-      3. 显示可用项目列表
-    """
+    """pytest 初始化钩子。"""
     ensure_dirs()
 
-    # 获取项目名称：优先命令行参数，其次默认项目
     project_name: str = config.getoption("--project", default=None) or get_default_project()
-
-    # 加载项目配置并缓存
     project_cfg = get_project_config(project_name)
 
     info("=" * 60)
     info(f"ApiAutoTest 框架初始化 | 项目: {project_name}")
     info("=" * 60)
 
-    # 显示可用项目
     show_available_projects()
 
 
@@ -88,31 +85,23 @@ def requests_util() -> RequestsUtil:
     """
     创建请求封装实例（Session 级别共享）。
 
-    根据 --project 参数自动选择对应项目的 base_url。
+    基于 requests.Session 实现：
+      - 连接池复用
+      - Cookie 自动管理
+      - 统一公共请求头
 
     Returns:
         RequestsUtil: 请求封装实例
     """
-    # 从 projects.yaml 获取当前项目的 base_url
-    project_name = get_default_project()
-    try:
-        import sys
-        for arg in sys.argv:
-            if arg.startswith("--project="):
-                project_name = arg.split("=", 1)[1]
-                break
-            elif arg == "--project" and sys.argv.index(arg) + 1 < len(sys.argv):
-                project_name = sys.argv[sys.argv.index(arg) + 1]
-                break
-    except Exception:
-        pass
-
+    project_name = _get_current_project_name()
     config = get_project_config(project_name)
     base_url = config.get("base_url", "https://httpbin.org")
     timeout = IniUtil.get_int("api", "timeout", 10)
     util = RequestsUtil(base_url=base_url, timeout=timeout)
     info(f"[conftest] 请求封装初始化完成: base_url={base_url}")
-    return util
+    yield util
+    # Session 结束时关闭连接池
+    util.close()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -123,33 +112,26 @@ def login_token() -> None:
     执行流程：
       1. 请求登录接口
       2. 从响应中提取 Token
-      3. 存入全局变量 GlobalData，供后续 #login_token# 引用
+      3. 存入全局变量 GlobalData
+      4. 后续接口根据 Excel 的「是否鉴权」列自动注入
     """
-    project_name = get_default_project()
-    try:
-        import sys
-        for arg in sys.argv:
-            if arg.startswith("--project="):
-                project_name = arg.split("=", 1)[1]
-                break
-    except Exception:
-        pass
-
+    project_name = _get_current_project_name()
     config = get_project_config(project_name)
     base_url = config.get("base_url", "https://httpbin.org")
 
-    # 模拟登录请求（httpbin.org/post 回显请求体）
+    # 使用 Session 发送登录请求（保持会话状态）
+    session = requests.Session()
     login_url = f"{base_url}/post"
     payload = {"username": "admin", "password": "123456"}
 
     try:
-        response = requests.post(login_url, json=payload, timeout=10)
+        response = session.post(login_url, json=payload, timeout=10)
         resp_json = response.json()
 
         # 从响应提取 token（httpbin 模拟环境使用默认值）
         token = resp_json.get("json", {}).get("token", "test-token-12345")
 
-        # 存入全局变量，供后续接口通过 #login_token# 引用
+        # 存入全局变量
         GlobalData.set("login_token", token)
         info(f"[conftest] 登录成功，Token 已存入全局变量: login_token = {token}")
 
@@ -157,3 +139,5 @@ def login_token() -> None:
         # 登录失败使用默认 Token，不阻塞测试
         GlobalData.set("login_token", "test-token-12345")
         info(f"[conftest] 登录异常，使用默认Token: {e}")
+    finally:
+        session.close()

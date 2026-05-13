@@ -7,6 +7,7 @@ Common/excel_util.py — Excel 读写封装
   - 表头行自动映射为字段名
   - 支持动态列，Excel 增减列不影响代码
   - 仅返回 enabled=Y 的用例
+  - 支持 login_status 列控制鉴权
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ class ApiCaseData:
     """
     Excel 用例数据模型。
 
-    对应 Excel 模板的 16 列定义，提供类型安全的访问接口。
+    对应 Excel 模板的列定义，提供类型安全的访问接口。
     """
     case_id: str = ""
     interface_name: str = ""
@@ -43,6 +44,7 @@ class ApiCaseData:
     global_var_name: str = ""      # 存入全局变量的变量名
     db_check_sql: str = ""         # 数据库校验 SQL
     db_expected_value: str = ""    # 数据库预期值
+    login_status: str = "Y"        # 是否鉴权：Y=自动注入Token, N=不注入
     enabled: str = "Y"
     module: str = ""               # 所属模块
     remark: str = ""
@@ -68,6 +70,11 @@ class ApiCaseData:
     @property
     def need_replace(self) -> bool:
         return self.replace_flag.strip().upper() == "Y"
+
+    @property
+    def need_auth(self) -> bool:
+        """是否需要鉴权注入Token。"""
+        return self.login_status.strip().lower() not in ("n", "no", "false")
 
     @property
     def display_name(self) -> str:
@@ -107,6 +114,7 @@ _COLUMN_MAP: dict[str, str] = {
     "全局变量名": "global_var_name",
     "数据库校验SQL": "db_check_sql",
     "数据库预期值": "db_expected_value",
+    "是否鉴权": "login_status",
     "是否启用": "enabled",
     "所属模块": "module",
     "备注": "remark",
@@ -194,6 +202,7 @@ def load_excel_cases(file_name: str = "api_test_data.xlsx", sheet_name: str | No
             global_var_name=row_data.get("global_var_name", ""),
             db_check_sql=row_data.get("db_check_sql", ""),
             db_expected_value=row_data.get("db_expected_value", ""),
+            login_status=row_data.get("login_status", "Y"),
             enabled=row_data.get("enabled", "Y"),
             module=row_data.get("module", ""),
             remark=row_data.get("remark", ""),
