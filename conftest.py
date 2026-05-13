@@ -1,11 +1,22 @@
 """
 conftest.py — 全局 Pytest Fixture 池
 
-提供以下 Session 级别 Fixture：
+提供以下功能：
+  - --project 命令行参数，支持多项目切换
   - requests_util: 创建 RequestsUtil 请求封装实例
   - login_token: 自动登录并存储 Token 到全局变量
 
 所有 Fixture 均为 Session 作用域。
+
+使用方式：
+  # 默认项目（httpbin）
+  python3 main.py
+
+  # 指定项目
+  python3 main.py --project=jsonplaceholder
+
+  # pytest 直接运行
+  python3 -m pytest TestCases/ --project=httpbin -v -s
 """
 from __future__ import annotations
 
@@ -22,14 +33,91 @@ from Common.path_util import ensure_dirs
 
 
 # ---------------------------------------------------------------------------
+# 项目配置缓存（Session 级别，避免重复读取 INI）
+# ---------------------------------------------------------------------------
+_project_config: dict[str, str] = {}
+
+
+def _get_project_config(project_name: str) -> dict[str, str]:
+    """
+    获取指定项目的配置信息。
+
+    从 config.ini 的 [project_项目名] 节读取配置，
+    如果项目节不存在则回退到默认 [api] 节。
+
+    Args:
+        project_name: 项目名称，如 httpbin、jsonplaceholder
+
+    Returns:
+        dict[str, str]: 项目配置，包含 excel_file、base_url 等
+    """
+    global _project_config
+
+    if _project_config:
+        return _project_config
+
+    section = f"project_{project_name}"
+
+    if IniUtil.get(section, "excel_file"):
+        _project_config = {
+            "excel_file": IniUtil.get(section, "excel_file", "api_test_data.xlsx"),
+            "base_url": IniUtil.get(section, "base_url", "https://httpbin.org"),
+            "description": IniUtil.get(section, "description", project_name),
+        }
+        info(f"[conftest] 使用项目配置: {section} → {_project_config}")
+    else:
+        # 回退到默认配置
+        _project_config = {
+            "excel_file": "api_test_data.xlsx",
+            "base_url": IniUtil.get("api", "base_url", "https://httpbin.org"),
+            "description": "默认项目",
+        }
+        info(f"[conftest] 项目节 [{section}] 不存在，使用默认配置")
+
+    return _project_config
+
+
+# ---------------------------------------------------------------------------
+# pytest 命令行参数注册
+# ---------------------------------------------------------------------------
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """
+    注册 --project 命令行参数。
+
+    使用方式：
+      pytest --project=httpbin
+      pytest --project=jsonplaceholder
+    """
+    parser.addoption(
+        "--project",
+        action="store",
+        default="httpbin",
+        help="指定测试项目名称，对应 config.ini 中的 [project_项目名] 节",
+    )
+
+
+# ---------------------------------------------------------------------------
 # 框架初始化
 # ---------------------------------------------------------------------------
 
 def pytest_configure(config: pytest.Config) -> None:
-    """pytest 初始化钩子，确保目录和日志就绪。"""
+    """
+    pytest 初始化钩子。
+
+    执行：
+      1. 确保输出目录存在
+      2. 加载项目配置
+      3. 初始化日志
+    """
     ensure_dirs()
+
+    # 获取项目名称并加载配置
+    project_name: str = config.getoption("--project", default="httpbin")
+    _get_project_config(project_name)
+
     info("=" * 60)
-    info("ApiAutoTest 框架初始化")
+    info(f"ApiAutoTest 框架初始化 | 项目: {project_name}")
     info("=" * 60)
 
 
@@ -42,10 +130,13 @@ def requests_util() -> RequestsUtil:
     """
     创建请求封装实例（Session 级别共享）。
 
+    根据 --project 参数自动选择对应项目的 base_url。
+
     Returns:
         RequestsUtil: 请求封装实例
     """
-    base_url = IniUtil.get("api", "base_url", "https://httpbin.org")
+    config = _get_project_config("")
+    base_url = config.get("base_url", "https://httpbin.org")
     timeout = IniUtil.get_int("api", "timeout", 10)
     util = RequestsUtil(base_url=base_url, timeout=timeout)
     info(f"[conftest] 请求封装初始化完成: base_url={base_url}")
@@ -62,7 +153,8 @@ def login_token() -> None:
       2. 从响应中提取 Token
       3. 存入全局变量 GlobalData，供后续 #login_token# 引用
     """
-    base_url = IniUtil.get("api", "base_url", "https://httpbin.org")
+    config = _get_project_config("")
+    base_url = config.get("base_url", "https://httpbin.org")
 
     # 模拟登录请求（httpbin.org/post 回显请求体）
     login_url = f"{base_url}/post"
